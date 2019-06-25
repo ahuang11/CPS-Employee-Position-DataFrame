@@ -1,3 +1,17 @@
+import os
+import glob
+
+import requests
+import tabula as tb
+import pandas as pd
+import dask.bag as db
+from bs4 import BeautifulSoup
+
+BASE_URL = 'https://cps.edu'
+FILE_URL = ('https://cps.edu/About_CPS/Financial_information/'
+            'Pages/EmployeePositionFiles.aspx')
+
+
 BASE_URL = 'https://cps.edu'
 FILE_URL = ('https://cps.edu/About_CPS/Financial_information/'
             'Pages/EmployeePositionFiles.aspx')
@@ -16,7 +30,7 @@ def list_urls():
 def get_paths(urls):
     """Download two files simultaneously and output to raw directory."""
     os.makedirs('raw', exist_ok=True)
-    db.from_sequence(urls, npartitions=2).map(
+    db.from_sequence(urls, npartitions=1).map(
         lambda url: os.system(f'wget -nc {url} -P raw')).compute()
     return sorted(glob.glob(os.path.join('raw', '*.xls')) +
                   glob.glob(os.path.join('raw', '*.pdf')))
@@ -150,6 +164,12 @@ def clean_joined_df(df):
     df[numeric_cols] = df[numeric_cols].apply(pd.to_numeric)
     df[text_cols] = df[text_cols].astype(str).apply(
         lambda col: col.str.replace('nan', ''))
+    
+    df['name'] = (df['name']
+                  .str.replace(',', ', ')
+                  .str.replace('Miss', '')
+                  .str.replace('Dr.', ''))
+    df['name'] = df['name'].str.replace('.', '').str.replace('  ', ' ')
     df = df.sort_index()
 
     int_cols = ['position number', 'unit number']
@@ -160,15 +180,28 @@ def clean_joined_df(df):
     return df
 
 
+def reduce_size():
+    """Make it so that the CSV is under 100 MBs to upload to GitHub"""
+    df = df.dropna()
+    df['job title'] = df['job title'].str.replace('Regular ', '')
+    df = df.drop(columns=['union affiliation', 'job code', 'fte'])
+    df['annual salary'] = df['annual salary'].astype(int)
+    df['unit name'] = df['unit name'].str.replace('School', '').str.strip()
+    return df
+
+
 def load():
     urls = list_urls()
     paths = get_paths(urls)
 
-    pkl_file = f'EmployeePositionRoster_Joined_Cleaned.pkl'
-    if os.path.exists(pkl_file):
-        return pd.read_pickle(pkl_file)
-
     df = pd.concat((read(path) for path in paths), sort=False)
     df = clean_joined_df(df)
+
+    pkl_file = f'EmployeePositionRoster_Joined_Cleaned.pkl'
     df.to_pickle(pkl_file)
+    
+    # save more space
+    df = reduce_size(df)
+    csv_file = f'EmployeePositionRoster_Joined_Cleaned.csv'
+    df.to_csv(csv_file)
     return df
